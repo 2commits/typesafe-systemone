@@ -15,30 +15,25 @@ typesafe-systemone = "0.1"
 ## Usage
 
 ```rust
-use typesafe_systemone::{Client, Question};
+use typesafe_systemone::Client;
 
 let client = Client::from_env()?; // TYPESAFE_API_KEY
 
 let response = client
-    .system_one(
-        serde_json::json!({ "message": "Help! My payouts have been failing for 3 days." }),
-        [
-            ("is_urgent", Question::noul("Does `message` convey urgency?")),
-            ("department", Question::choice(
-                "Which team should handle `message`?",
-                [
-                    ("billing", Some("Payments, invoicing, refunds")),
-                    ("technical", Some("Bugs, outages, integrations")),
-                    ("none_of_the_above", Some("No listed team fits")),
-                ],
-            )),
-            ("frustration", Question::score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"])),
-        ],
-    )
+    .system_one()
+    .field("message", "Help! My payouts have been failing for 3 days.")
+    .noul("is_urgent", "Does `message` convey urgency?")
+    .choice("department", "Which team should handle `message`?", |c| {
+        c.option("billing", "Payments, invoicing, refunds")
+            .option("technical", "Bugs, outages, integrations")
+            .none_of_the_above("No listed team fits")
+    })
+    .score("frustration", "How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"])
+    .send()
     .await?;
 
-let urgent: f64 = response.answers["is_urgent"].as_noul().unwrap();
-let team = response.answers["department"].as_choice().unwrap();
+let urgent: f64 = response.noul("is_urgent")?;
+let team = response.choice("department")?;
 if team.confidence >= 0.9 {
     route(&team.choice);
 } else {
@@ -46,16 +41,26 @@ if team.confidence >= 0.9 {
 }
 ```
 
+`state` is whatever the questions refer to. Build it with `.field(name, value)` calls, or
+pass one `Serialize` value with `.state(my_struct)`; `.model(..)` overrides the client's
+model for one call. Input mistakes (no state, no questions, a Choice without options, a
+duplicate id) come back from `.send()` as `Error::InvalidRequest`, so the chain stays clean.
+
+Already holding a question map? `client.evaluate(state, questions)` takes `(id, Question)`
+pairs directly.
+
 ### Primitives
 
-| Constructor | Answer | Use for |
+| Builder | Read the answer | Use for |
 |---|---|---|
-| `Question::noul` / `noul_with_criteria` | `noul: f64` probability of yes | "does this condition hold?" |
-| `Question::choice` / `choice_plain` | `choice`, `probabilities`, `confidence` | one of up to 255 options |
-| `Question::score` | `score`, `legend`, `probabilities`, `confidence` | position on an ordered rubric |
+| `.noul(id, q)` / `.noul_with_criteria(..)` | `response.noul(id)?` (probability of yes) | "does this condition hold?" |
+| `.choice(id, q, closure)` with `.option(..)`, `.options_plain(..)`, `.none_of_the_above(..)` | `response.choice(id)?` (`choice`, `probabilities`, `confidence`, `ranked()`) | one of up to 255 options |
+| `.score(id, q, levels)` | `response.score(id)?` (`score`, `legend`, `probabilities`, `confidence`) | position on an ordered rubric |
 
-Ask independent questions about the same state in one call. Add a `none_of_the_above`
-option to a Choice when the list may not cover every input.
+`Question::noul` / `choice` / `score` constructors exist too, for `.question(id, q)` and `client.evaluate(..)`.
+
+Ask independent questions about the same state in one call. Add `.none_of_the_above(..)`
+to a Choice when the list may not cover every input; a Choice always picks something.
 
 ### Configuration
 

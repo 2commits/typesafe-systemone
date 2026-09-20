@@ -13,6 +13,14 @@ pub enum Error {
     #[error("configuration error: {0}")]
     Config(String),
 
+    /// The request was not sendable as built (no state, no questions, bad option set).
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+
+    /// The response has no answer of the expected type under this id.
+    #[error("no {expected} answer for question `{id}`")]
+    MissingAnswer { id: String, expected: &'static str },
+
     /// 400.
     #[error("bad request: {message}")]
     BadRequest { message: String },

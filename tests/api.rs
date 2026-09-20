@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::json;
 use typesafe_systemone::{Client, Error, Question, RetryPolicy};
 use wiremock::matchers::{body_json, header, method, path};
@@ -53,7 +54,7 @@ async fn system_one_sends_documented_body_and_parses_answers() {
         .await;
 
     let resp = client(&server)
-        .system_one(
+        .evaluate(
             json!({"message": "Help! My payouts have been failing for 3 days."}),
             [
                 ("is_urgent", Question::noul("Does `message` convey urgency?")),
@@ -89,7 +90,7 @@ async fn explicit_model_overrides_default() {
         .mount(&server)
         .await;
     let resp = client(&server)
-        .system_one_with_model("jev-preview", "x", [("q", Question::noul("?"))])
+        .evaluate_with_model("jev-preview", "x", [("q", Question::noul("?"))])
         .await
         .unwrap();
     assert_eq!(resp.model, "jev-preview");
@@ -104,7 +105,7 @@ async fn unauthorized_maps_to_authentication_and_is_not_retried() {
         .mount(&server)
         .await;
     let err = client(&server)
-        .system_one("x", [("q", Question::noul("?"))])
+        .evaluate("x", [("q", Question::noul("?"))])
         .await
         .unwrap_err();
     assert!(
@@ -123,7 +124,7 @@ async fn unprocessable_entity_is_not_retried() {
         .mount(&server)
         .await;
     let err = client(&server)
-        .system_one("x", [("q", Question::score("?", ["a"]))])
+        .evaluate("x", [("q", Question::score("?", ["a"]))])
         .await
         .unwrap_err();
     assert!(matches!(err, Error::UnprocessableEntity { .. }), "{err:?}");
@@ -148,7 +149,7 @@ async fn rate_limit_is_retried_then_succeeds() {
         .mount(&server)
         .await;
     let resp = client(&server)
-        .system_one("x", [("q", Question::noul("?"))])
+        .evaluate("x", [("q", Question::noul("?"))])
         .await
         .unwrap();
     assert_eq!(resp.model, "jev-1.13.0");
@@ -167,7 +168,7 @@ async fn overloaded_exhausts_retries_and_surfaces_retry_after() {
         .mount(&server)
         .await;
     let err = client(&server)
-        .system_one("x", [("q", Question::noul("?"))])
+        .evaluate("x", [("q", Question::noul("?"))])
         .await
         .unwrap_err();
     assert!(
@@ -190,7 +191,7 @@ async fn retry_none_makes_one_attempt() {
         .retry(RetryPolicy::none())
         .build()
         .unwrap();
-    let err = c.system_one("x", [("q", Question::noul("?"))]).await.unwrap_err();
+    let err = c.evaluate("x", [("q", Question::noul("?"))]).await.unwrap_err();
     assert!(matches!(err, Error::Server { status: 503, .. }), "{err:?}");
 }
 
@@ -204,7 +205,7 @@ async fn malformed_success_body_is_response_validation() {
         .mount(&server)
         .await;
     let err = client(&server)
-        .system_one("x", [("q", Question::noul("?"))])
+        .evaluate("x", [("q", Question::noul("?"))])
         .await
         .unwrap_err();
     assert!(matches!(err, Error::ResponseValidation(_)), "{err:?}");
@@ -262,4 +263,169 @@ fn builder_defaults() {
         !dbg.contains('k') || !dbg.contains("api_key"),
         "debug output must not leak the key: {dbg}"
     );
+}
+
+#[tokio::test]
+async fn builder_sends_documented_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(body_json(json!({
+            "state": {"message": "Help! My payouts have been failing for 3 days.", "tier": "gold"},
+            "model": "jev-1.13.0",
+            "questions": {
+                "is_urgent": {"type": "noul", "instructions": "Does `message` convey urgency?"},
+                "department": {"type": "choice", "instructions": "Which team?",
+                                "criteria": {"billing": "Payments", "technical": null, "none_of_the_above": "No listed team fits"}},
+                "frustration": {"type": "score", "instructions": "How frustrated?", "criteria": ["Calm", "Angry"]}
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(golden_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let resp = client(&server)
+        .system_one()
+        .field("message", "Help! My payouts have been failing for 3 days.")
+        .field("tier", "gold")
+        .noul("is_urgent", "Does `message` convey urgency?")
+        .choice("department", "Which team?", |c| {
+            c.option("billing", "Payments")
+                .option_plain("technical")
+                .none_of_the_above("No listed team fits")
+        })
+        .score("frustration", "How frustrated?", ["Calm", "Angry"])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.noul("is_urgent").unwrap(), 0.92);
+    assert_eq!(resp.choice("department").unwrap().choice, "technical");
+}
+
+#[tokio::test]
+async fn builder_accepts_a_typed_state_and_per_call_model() {
+    #[derive(Serialize)]
+    struct Ticket<'a> {
+        subject: &'a str,
+        messages: Vec<&'a str>,
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_json(json!({
+            "state": {"subject": "Duplicate charge", "messages": ["I was charged twice"]},
+            "model": "jev-preview",
+            "questions": {"refund": {"type": "noul", "instructions": "Refund requested?"}}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-preview", "answers": {"refund": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 1, "output_tokens": 1}})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let resp = client(&server)
+        .system_one()
+        .model("jev-preview")
+        .state(Ticket {
+            subject: "Duplicate charge",
+            messages: vec!["I was charged twice"],
+        })
+        .noul("refund", "Refund requested?")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.noul("refund").unwrap(), 0.9);
+}
+
+#[tokio::test]
+async fn builder_rejects_bad_inputs_before_sending() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let c = client(&server);
+
+    let err = c.system_one().noul("q", "?").send().await.unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("no state")),
+        "{err:?}"
+    );
+
+    let err = c.system_one().field("a", 1).send().await.unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("no questions")),
+        "{err:?}"
+    );
+
+    let err = c
+        .system_one()
+        .state("plain text")
+        .field("a", 1)
+        .noul("q", "?")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("not an object")),
+        "{err:?}"
+    );
+
+    let err = c
+        .system_one()
+        .field("a", 1)
+        .noul("q", "?")
+        .noul("q", "again")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("duplicate")),
+        "{err:?}"
+    );
+
+    let err = c
+        .system_one()
+        .field("a", 1)
+        .choice("c", "?", |c| c)
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("no options")),
+        "{err:?}"
+    );
+
+    let err = c
+        .system_one()
+        .field("a", 1)
+        .score("s", "?", ["one"])
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("two levels")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn builder_merges_fields_into_an_object_state() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_json(json!({"state": {"a": 1, "b": 2}, "model": "jev-1.13.0",
+                              "questions": {"q": {"type": "noul", "instructions": "?"}}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(golden_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    client(&server)
+        .system_one()
+        .state(json!({"a": 1}))
+        .field("b", 2)
+        .noul("q", "?")
+        .send()
+        .await
+        .unwrap();
 }

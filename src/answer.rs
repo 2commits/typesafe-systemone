@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::error::{Error, Result};
+
 /// Answer to a [`Question::Noul`](crate::Question::Noul).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct NoulAnswer {
@@ -95,6 +97,39 @@ pub struct SystemOneResponse {
     pub usage: Usage,
 }
 
+impl SystemOneResponse {
+    /// The yes-probability of the Noul question `id`.
+    pub fn noul(&self, id: &str) -> Result<f64> {
+        self.answers
+            .get(id)
+            .and_then(Answer::as_noul)
+            .ok_or_else(|| missing(id, "noul"))
+    }
+
+    /// The answer to the Choice question `id`.
+    pub fn choice(&self, id: &str) -> Result<&ChoiceAnswer> {
+        self.answers
+            .get(id)
+            .and_then(Answer::as_choice)
+            .ok_or_else(|| missing(id, "choice"))
+    }
+
+    /// The answer to the Score question `id`.
+    pub fn score(&self, id: &str) -> Result<&ScoreAnswer> {
+        self.answers
+            .get(id)
+            .and_then(Answer::as_score)
+            .ok_or_else(|| missing(id, "score"))
+    }
+}
+
+fn missing(id: &str, expected: &'static str) -> Error {
+    Error::MissingAnswer {
+        id: id.to_string(),
+        expected,
+    }
+}
+
 /// One entry from `GET /v1/models`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct ModelInfo {
@@ -137,5 +172,12 @@ mod tests {
         assert_eq!(score.legend["2"], "Very angry");
         assert_eq!(resp.usage.input_tokens, 312);
         assert!(resp.answers["is_urgent"].as_choice().is_none());
+        assert_eq!(resp.noul("is_urgent").unwrap(), 0.92);
+        assert_eq!(resp.choice("department").unwrap().choice, "technical");
+        assert!(matches!(
+            resp.choice("is_urgent"),
+            Err(Error::MissingAnswer { expected: "choice", .. })
+        ));
+        assert!(matches!(resp.score("nope"), Err(Error::MissingAnswer { .. })));
     }
 }

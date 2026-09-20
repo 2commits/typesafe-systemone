@@ -3,6 +3,10 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::Value;
 
+/// Conventional name of the abstain option in a Choice. The model always picks *some*
+/// option, so give it one that means "nothing here fits".
+pub const NONE_OF_THE_ABOVE: &str = "none_of_the_above";
+
 /// Optional descriptions of what a "yes" and a "no" mean for a [`Question::Noul`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct NoulCriteria {

@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::answer::{ModelInfo, ModelsResponse, SystemOneResponse};
 use crate::error::{Error, Result};
 use crate::question::Question;
+use crate::request::SystemOneRequest;
 use crate::retry::RetryPolicy;
 
 /// Production API root.
@@ -178,11 +179,17 @@ impl Client {
         &self.inner.model
     }
 
-    /// Evaluate `state` against `questions` with the client's default model.
+    /// Start building a `POST /v1/systemone` call: state, questions, then `.send()`.
+    pub fn system_one(&self) -> SystemOneRequest<'_> {
+        SystemOneRequest::new(self)
+    }
+
+    /// Evaluate `state` against an existing map of `questions` with the client's default
+    /// model. The builder form is [`Client::system_one`].
     ///
     /// Questions are keyed by the ids you choose; answers come back under the same ids.
     /// All questions see the same state and are evaluated independently.
-    pub async fn system_one<K>(
+    pub async fn evaluate<K>(
         &self,
         state: impl Serialize,
         questions: impl IntoIterator<Item = (K, Question)>,
@@ -191,11 +198,11 @@ impl Client {
         K: Into<String>,
     {
         let model = self.inner.model.clone();
-        self.system_one_with_model(&model, state, questions).await
+        self.evaluate_with_model(&model, state, questions).await
     }
 
-    /// Evaluate `state` against `questions` with an explicit `model`.
-    pub async fn system_one_with_model<K>(
+    /// [`Client::evaluate`] with an explicit `model`.
+    pub async fn evaluate_with_model<K>(
         &self,
         model: &str,
         state: impl Serialize,
