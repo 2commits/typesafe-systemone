@@ -70,11 +70,7 @@ impl<'a> SystemOneRequest<'a> {
         let name = name.into();
         self.state = match std::mem::replace(&mut self.state, State::Empty) {
             State::Empty => State::Fields(Map::from_iter([(name, value)])),
-            State::Fields(mut map) => {
-                map.insert(name, value);
-                State::Fields(map)
-            }
-            State::Whole(Value::Object(mut map)) => {
+            State::Fields(mut map) | State::Whole(Value::Object(mut map)) => {
                 map.insert(name, value);
                 State::Fields(map)
             }
@@ -158,6 +154,13 @@ impl<'a> SystemOneRequest<'a> {
     }
 
     /// Send the request.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidRequest`] for a request that is not sendable as built: no state, no
+    /// questions, a Choice without options, a Score with fewer than two levels, a duplicate
+    /// question id, or a field added to a non-object state. [`Error::RequestSerialization`]
+    /// if a `state`/`field` value failed to serialise. Otherwise as [`Client::evaluate`].
     pub async fn send(self) -> Result<SystemOneResponse> {
         if let Some(e) = self.error {
             return Err(e);
@@ -189,6 +192,7 @@ impl<'a> SystemOneRequest<'a> {
 
 /// Option set of a Choice, built inside [`SystemOneRequest::choice`].
 #[derive(Default)]
+#[must_use = "return the builder from the `choice` closure"]
 pub struct ChoiceBuilder {
     options: BTreeMap<String, Option<String>>,
 }

@@ -38,6 +38,8 @@
 //! This is an unofficial client. The API contract it follows is documented at
 //! <https://docs.typesafe.ai/api>.
 
+#![warn(missing_docs)]
+
 mod answer;
 mod client;
 mod error;

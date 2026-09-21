@@ -8,7 +8,7 @@ use serde_json::Value;
 pub const NONE_OF_THE_ABOVE: &str = "none_of_the_above";
 
 /// Optional descriptions of what a "yes" and a "no" mean for a [`Question::Noul`].
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct NoulCriteria {
     /// What a yes (value near 1) means.
     #[serde(rename = "true", skip_serializing_if = "Option::is_none")]
@@ -27,19 +27,27 @@ pub struct NoulCriteria {
 pub enum Question {
     /// Yes/no. Answered with the probability of "yes".
     Noul {
+        /// The question, referring to the state.
         instructions: Value,
+        /// What yes and no mean, when spelled out.
         #[serde(skip_serializing_if = "Option::is_none")]
         criteria: Option<NoulCriteria>,
     },
     /// One option out of a defined set (at most 255). Answered with the chosen option
     /// and the probability of every option.
     Choice {
+        /// The question, referring to the state.
         instructions: Value,
         /// Option → optional rubric description.
         criteria: BTreeMap<String, Option<String>>,
     },
     /// A position along an ordered rubric of at least two levels.
-    Score { instructions: Value, criteria: Vec<String> },
+    Score {
+        /// The question, referring to the state.
+        instructions: Value,
+        /// Level descriptions, lowest first.
+        criteria: Vec<String>,
+    },
 }
 
 impl Question {

@@ -1,6 +1,6 @@
 [package]
 name = "typesafe-systemone"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Async Rust client for the TypeSafe System One API (Jev): typed Noul, Choice and Score judgments"
@@ -29,3 +29,14 @@ wiremock = "0.6"
 
 [package.metadata.docs.rs]
 all-features = false
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Product names (TypeSafe, Jev) and JSON keys appear in prose; backticking them reads wrong.
+doc_markdown = "allow"
+# Private modules with flat re-exports: `client::ClientBuilder` is the natural name.
+module_name_repetitions = "allow"

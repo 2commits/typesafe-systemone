@@ -51,6 +51,7 @@ impl fmt::Debug for Client {
 
 /// Builder for [`Client`]. Explicit values win over environment variables.
 #[derive(Default)]
+#[must_use = "call `.build()` to get a Client"]
 pub struct ClientBuilder {
     api_key: Option<String>,
     base_url: Option<String>,
@@ -112,7 +113,14 @@ impl ClientBuilder {
         self
     }
 
-    /// Build the client. Fails when no API key is available.
+    /// Build the client.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] when no API key is set (builder or `TYPESAFE_API_KEY`), when the
+    /// default HTTP client cannot be built, or when this crate was compiled without a TLS
+    /// backend (`default-features = false`, neither `rustls` nor `native-tls`) and no
+    /// [`http_client`](Self::http_client) was supplied to stand in for one.
     pub fn build(self) -> Result<Client> {
         let api_key = self
             .api_key
@@ -131,6 +139,13 @@ impl ClientBuilder {
             .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
         let http = match self.http {
             Some(h) => h,
+            None if cfg!(not(any(feature = "rustls", feature = "native-tls"))) => {
+                return Err(Error::Config(
+                    "no TLS backend: enable the `rustls` or `native-tls` feature, or pass a reqwest::Client via \
+                     ClientBuilder::http_client"
+                        .to_string(),
+                ));
+            }
             None => reqwest::Client::builder()
                 .build()
                 .map_err(|e| Error::Config(format!("failed to build HTTP client: {e}")))?,
@@ -170,11 +185,16 @@ impl Client {
 
     /// Client configured entirely from `TYPESAFE_API_KEY`, `TYPESAFE_DEFAULT_MODEL` and
     /// `TYPESAFE_BASE_URL`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`ClientBuilder::build`]; in practice a missing `TYPESAFE_API_KEY`.
     pub fn from_env() -> Result<Self> {
         Self::builder().build()
     }
 
     /// The model used when [`Client::system_one`] is called.
+    #[must_use]
     pub fn default_model(&self) -> &str {
         &self.inner.model
     }
@@ -189,6 +209,14 @@ impl Client {
     ///
     /// Questions are keyed by the ids you choose; answers come back under the same ids.
     /// All questions see the same state and are evaluated independently.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::RequestSerialization`] if `state` cannot be serialised; an HTTP-status
+    /// variant ([`Error::Authentication`], [`Error::UnprocessableEntity`], [`Error::RateLimit`],
+    /// …) for a non-2xx answer after retries; [`Error::Connection`] / [`Error::Timeout`] for
+    /// transport failures; [`Error::ResponseValidation`] if the body is not the documented
+    /// shape.
     pub async fn evaluate<K>(
         &self,
         state: impl Serialize,
@@ -197,11 +225,14 @@ impl Client {
     where
         K: Into<String>,
     {
-        let model = self.inner.model.clone();
-        self.evaluate_with_model(&model, state, questions).await
+        self.evaluate_with_model(&self.inner.model, state, questions).await
     }
 
     /// [`Client::evaluate`] with an explicit `model`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::evaluate`].
     pub async fn evaluate_with_model<K>(
         &self,
         model: &str,
@@ -224,6 +255,12 @@ impl Client {
     }
 
     /// List the model names and aliases this account may send in the `model` field.
+    ///
+    /// # Errors
+    ///
+    /// An HTTP-status variant for a non-2xx answer after retries, [`Error::Connection`] /
+    /// [`Error::Timeout`] for transport failures, [`Error::ResponseValidation`] for an
+    /// unexpected body.
     pub async fn models(&self) -> Result<Vec<ModelInfo>> {
         let bytes = self.send(reqwest::Method::GET, "/v1/models", None).await?;
         let parsed: ModelsResponse = serde_json::from_slice(&bytes).map_err(Error::ResponseValidation)?;
@@ -296,7 +333,7 @@ async fn read_error_body(resp: reqwest::Response) -> String {
         .and_then(|v| {
             ["detail", "message", "error"].into_iter().find_map(|k| {
                 v.get(k)
-                    .map(|m| m.as_str().map(str::to_owned).unwrap_or_else(|| m.to_string()))
+                    .map(|m| m.as_str().map_or_else(|| m.to_string(), str::to_owned))
             })
         })
         .unwrap_or(text);

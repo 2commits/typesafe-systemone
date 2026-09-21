@@ -24,6 +24,7 @@ pub struct ChoiceAnswer {
 
 impl ChoiceAnswer {
     /// Options ordered by descending probability.
+    #[must_use]
     pub fn ranked(&self) -> Vec<(&str, f64)> {
         let mut ranked: Vec<(&str, f64)> = self.probabilities.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -49,14 +50,18 @@ pub struct ScoreAnswer {
 #[serde(tag = "type", rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Answer {
+    /// Answer to a Noul question.
     Noul(NoulAnswer),
+    /// Answer to a Choice question.
     Choice(ChoiceAnswer),
+    /// Answer to a Score question.
     Score(ScoreAnswer),
 }
 
 impl Answer {
     /// The yes-probability, if this answers a Noul question.
-    pub fn as_noul(&self) -> Option<f64> {
+    #[must_use]
+    pub const fn as_noul(&self) -> Option<f64> {
         match self {
             Self::Noul(a) => Some(a.noul),
             _ => None,
@@ -64,7 +69,8 @@ impl Answer {
     }
 
     /// The choice answer, if this answers a Choice question.
-    pub fn as_choice(&self) -> Option<&ChoiceAnswer> {
+    #[must_use]
+    pub const fn as_choice(&self) -> Option<&ChoiceAnswer> {
         match self {
             Self::Choice(a) => Some(a),
             _ => None,
@@ -72,7 +78,8 @@ impl Answer {
     }
 
     /// The score answer, if this answers a Score question.
-    pub fn as_score(&self) -> Option<&ScoreAnswer> {
+    #[must_use]
+    pub const fn as_score(&self) -> Option<&ScoreAnswer> {
         match self {
             Self::Score(a) => Some(a),
             _ => None,
@@ -83,7 +90,9 @@ impl Answer {
 /// Token usage for one request. Output tokens are not billed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct Usage {
+    /// Tokens in `state` plus all questions. The billed quantity.
     pub input_tokens: u64,
+    /// Tokens in the answers. Not billed.
     pub output_tokens: u64,
 }
 
@@ -94,11 +103,16 @@ pub struct SystemOneResponse {
     pub model: String,
     /// One answer per question, under the same keys.
     pub answers: HashMap<String, Answer>,
+    /// Token accounting for this request.
     pub usage: Usage,
 }
 
 impl SystemOneResponse {
     /// The yes-probability of the Noul question `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MissingAnswer`] if there is no answer under `id` or it is not a Noul.
     pub fn noul(&self, id: &str) -> Result<f64> {
         self.answers
             .get(id)
@@ -107,6 +121,10 @@ impl SystemOneResponse {
     }
 
     /// The answer to the Choice question `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MissingAnswer`] if there is no answer under `id` or it is not a Choice.
     pub fn choice(&self, id: &str) -> Result<&ChoiceAnswer> {
         self.answers
             .get(id)
@@ -115,6 +133,10 @@ impl SystemOneResponse {
     }
 
     /// The answer to the Score question `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MissingAnswer`] if there is no answer under `id` or it is not a Score.
     pub fn score(&self, id: &str) -> Result<&ScoreAnswer> {
         self.answers
             .get(id)
@@ -135,7 +157,9 @@ fn missing(id: &str, expected: &'static str) -> Error {
 pub struct ModelInfo {
     /// Model id or alias accepted by the `model` field.
     pub name: String,
+    /// What the model is for.
     pub description: String,
+    /// When the model or alias was released, as the API reports it.
     pub release_date: String,
 }
 
@@ -145,6 +169,10 @@ pub(crate) struct ModelsResponse {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "values are parsed verbatim from JSON literals, exact comparison is intended"
+)]
 mod tests {
     use super::*;
     use serde_json::json;

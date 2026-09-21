@@ -19,49 +19,83 @@ pub enum Error {
 
     /// The response has no answer of the expected type under this id.
     #[error("no {expected} answer for question `{id}`")]
-    MissingAnswer { id: String, expected: &'static str },
+    MissingAnswer {
+        /// The question id that was looked up.
+        id: String,
+        /// The answer type that was expected: `noul`, `choice` or `score`.
+        expected: &'static str,
+    },
 
     /// 400.
     #[error("bad request: {message}")]
-    BadRequest { message: String },
+    BadRequest {
+        /// Response body, truncated.
+        message: String,
+    },
 
     /// 401: missing or invalid API key.
     #[error("authentication failed: {message}")]
-    Authentication { message: String },
+    Authentication {
+        /// Response body, truncated.
+        message: String,
+    },
 
     /// 403.
     #[error("permission denied: {message}")]
-    PermissionDenied { message: String },
+    PermissionDenied {
+        /// Response body, truncated.
+        message: String,
+    },
 
     /// 404.
     #[error("not found: {message}")]
-    NotFound { message: String },
+    NotFound {
+        /// Response body, truncated.
+        message: String,
+    },
 
     /// 422: the request body failed validation.
     #[error("unprocessable entity: {message}")]
-    UnprocessableEntity { message: String },
+    UnprocessableEntity {
+        /// Response body, truncated; names the offending field.
+        message: String,
+    },
 
     /// 429: rate limit exceeded after all retries.
     #[error("rate limited: {message}")]
     RateLimit {
+        /// The server's `retry-after`, when it sent one.
         retry_after: Option<Duration>,
+        /// Response body, truncated.
         message: String,
     },
 
     /// 529: TypeSafe is temporarily overloaded, after all retries.
     #[error("overloaded: {message}")]
     Overloaded {
+        /// The server's `retry-after`, when it sent one.
         retry_after: Option<Duration>,
+        /// Response body, truncated.
         message: String,
     },
 
     /// Any other 5xx, after all retries.
     #[error("server error {status}: {message}")]
-    Server { status: u16, message: String },
+    Server {
+        /// HTTP status code.
+        status: u16,
+        /// Response body, truncated.
+        message: String,
+    },
 
     /// Any other unexpected status.
     #[error("unexpected status {status}: {message}")]
-    UnexpectedStatus { status: u16, message: String },
+    UnexpectedStatus {
+        /// HTTP status code.
+        status: u16,
+        /// Response body, truncated.
+        message: String,
+    },
 
     /// The request never produced a response (DNS, connect, TLS, reset).
     #[error("connection error: {0}")]
@@ -82,7 +116,8 @@ pub enum Error {
 
 impl Error {
     /// The HTTP status behind this error, when there is one.
-    pub fn status(&self) -> Option<u16> {
+    #[must_use]
+    pub const fn status(&self) -> Option<u16> {
         match self {
             Self::BadRequest { .. } => Some(400),
             Self::Authentication { .. } => Some(401),

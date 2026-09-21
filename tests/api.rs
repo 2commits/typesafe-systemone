@@ -1,3 +1,9 @@
+//! Integration tests against a wiremock stand-in for `api.typesafe.ai`.
+#![allow(
+    clippy::float_cmp,
+    reason = "probabilities are parsed verbatim from JSON literals, exact comparison is intended"
+)]
+
 use std::time::Duration;
 
 use serde::Serialize;
@@ -337,29 +343,41 @@ async fn builder_accepts_a_typed_state_and_per_call_model() {
     assert_eq!(resp.noul("refund").unwrap(), 0.9);
 }
 
-#[tokio::test]
-async fn builder_rejects_bad_inputs_before_sending() {
+/// A server that must never be reached: these requests fail before sending.
+async fn unreachable_server() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(500))
         .expect(0)
         .mount(&server)
         .await;
-    let c = client(&server);
+    server
+}
 
-    let err = c.system_one().noul("q", "?").send().await.unwrap_err();
+#[tokio::test]
+async fn send_rejects_missing_state() {
+    let server = unreachable_server().await;
+    let err = client(&server).system_one().noul("q", "?").send().await.unwrap_err();
     assert!(
         matches!(err, Error::InvalidRequest(ref m) if m.contains("no state")),
         "{err:?}"
     );
+}
 
-    let err = c.system_one().field("a", 1).send().await.unwrap_err();
+#[tokio::test]
+async fn send_rejects_missing_questions() {
+    let server = unreachable_server().await;
+    let err = client(&server).system_one().field("a", 1).send().await.unwrap_err();
     assert!(
         matches!(err, Error::InvalidRequest(ref m) if m.contains("no questions")),
         "{err:?}"
     );
+}
 
-    let err = c
+#[tokio::test]
+async fn send_rejects_field_on_non_object_state() {
+    let server = unreachable_server().await;
+    let err = client(&server)
         .system_one()
         .state("plain text")
         .field("a", 1)
@@ -371,8 +389,12 @@ async fn builder_rejects_bad_inputs_before_sending() {
         matches!(err, Error::InvalidRequest(ref m) if m.contains("not an object")),
         "{err:?}"
     );
+}
 
-    let err = c
+#[tokio::test]
+async fn send_rejects_duplicate_question_id() {
+    let server = unreachable_server().await;
+    let err = client(&server)
         .system_one()
         .field("a", 1)
         .noul("q", "?")
@@ -384,8 +406,12 @@ async fn builder_rejects_bad_inputs_before_sending() {
         matches!(err, Error::InvalidRequest(ref m) if m.contains("duplicate")),
         "{err:?}"
     );
+}
 
-    let err = c
+#[tokio::test]
+async fn send_rejects_choice_without_options() {
+    let server = unreachable_server().await;
+    let err = client(&server)
         .system_one()
         .field("a", 1)
         .choice("c", "?", |c| c)
@@ -396,8 +422,12 @@ async fn builder_rejects_bad_inputs_before_sending() {
         matches!(err, Error::InvalidRequest(ref m) if m.contains("no options")),
         "{err:?}"
     );
+}
 
-    let err = c
+#[tokio::test]
+async fn send_rejects_score_with_one_level() {
+    let server = unreachable_server().await;
+    let err = client(&server)
         .system_one()
         .field("a", 1)
         .score("s", "?", ["one"])

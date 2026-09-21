@@ -14,7 +14,7 @@ pub struct RetryPolicy {
     pub backoff_max: Duration,
     /// Fraction of each delay randomly subtracted, in `0.0..=1.0`.
     pub backoff_jitter: f64,
-    /// Honour a `retry-after` header when the server sends one.
+    /// Honour a `retry-after` header when the server sends one, capped at `backoff_max`.
     pub respect_retry_after: bool,
 }
 
@@ -32,6 +32,7 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     /// Never retry.
+    #[must_use]
     pub fn none() -> Self {
         Self {
             max_retries: 0,
@@ -43,11 +44,13 @@ impl RetryPolicy {
         status == 408 || status == 429 || (500..=599).contains(&status)
     }
 
-    /// Delay before retry number `retry` (1-based). `retry_after` wins when honoured.
+    /// Delay before retry number `retry` (1-based). A honoured `retry_after` replaces the
+    /// backoff but never exceeds `backoff_max`: a server asking for an hour must not park
+    /// the caller for an hour inside a policy that promised five seconds.
     pub(crate) fn delay(&self, retry: u32, retry_after: Option<Duration>) -> Duration {
         if self.respect_retry_after {
             if let Some(d) = retry_after {
-                return d.min(self.backoff_max.max(d));
+                return d.min(self.backoff_max);
             }
         }
         let exp = self
@@ -66,13 +69,13 @@ impl RetryPolicy {
 fn unit_random() -> f64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as u64)
-        .unwrap_or(0);
+        .map_or(0, |d| u64::from(d.subsec_nanos()));
     let mut x = nanos ^ 0x9E37_79B9_7F4A_7C15;
     x ^= x << 13;
     x ^= x >> 7;
     x ^= x << 17;
-    (x % 10_000) as f64 / 10_000.0
+    // Reduce to u32 first: the value is below 10 000, so the cast to f64 is exact.
+    f64::from((x % 10_000) as u32) / 10_000.0
 }
 
 #[cfg(test)]
@@ -96,8 +99,8 @@ mod tests {
             ..RetryPolicy::default()
         };
         assert_eq!(p.delay(1, None), Duration::from_millis(500));
-        assert_eq!(p.delay(2, None), Duration::from_millis(1000));
-        assert_eq!(p.delay(3, None), Duration::from_millis(2000));
+        assert_eq!(p.delay(2, None), Duration::from_secs(1));
+        assert_eq!(p.delay(3, None), Duration::from_secs(2));
         assert_eq!(p.delay(10, None), Duration::from_secs(5));
     }
 
@@ -117,6 +120,16 @@ mod tests {
     fn retry_after_wins_when_respected() {
         let p = RetryPolicy::default();
         assert_eq!(p.delay(1, Some(Duration::from_secs(3))), Duration::from_secs(3));
+    }
+
+    #[test]
+    fn retry_after_is_capped_at_backoff_max() {
+        let p = RetryPolicy::default();
+        assert_eq!(p.delay(1, Some(Duration::from_secs(3600))), p.backoff_max);
+    }
+
+    #[test]
+    fn retry_after_is_ignored_when_not_respected() {
         let p = RetryPolicy {
             respect_retry_after: false,
             backoff_jitter: 0.0,
