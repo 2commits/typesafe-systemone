@@ -50,6 +50,6 @@ mod retry;
 pub use answer::{Answer, ChoiceAnswer, ModelInfo, NoulAnswer, ScoreAnswer, SystemOneResponse, Usage};
 pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL, DEFAULT_MODEL};
 pub use error::{Error, Result};
-pub use question::{NONE_OF_THE_ABOVE, NoulCriteria, Question};
+pub use question::{MAX_CHOICE_OPTIONS, NONE_OF_THE_ABOVE, NoulCriteria, Question};
 pub use request::{ChoiceBuilder, SystemOneRequest};
 pub use retry::RetryPolicy;

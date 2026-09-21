@@ -7,6 +7,9 @@ use serde_json::Value;
 /// option, so give it one that means "nothing here fits".
 pub const NONE_OF_THE_ABOVE: &str = "none_of_the_above";
 
+/// Options one Choice may carry, per the API. Counting the abstain option.
+pub const MAX_CHOICE_OPTIONS: usize = 255;
+
 /// Optional descriptions of what a "yes" and a "no" mean for a [`Question::Noul`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct NoulCriteria {
@@ -21,11 +24,16 @@ pub struct NoulCriteria {
 /// A typed question evaluated against the request `state`.
 ///
 /// `instructions` may be a string, object or array. Reference nested state with
-/// backticked paths such as `` `rows[3].country` ``.
+/// backticked paths such as `` `rows[3].country` ``. Construct through the associated
+/// functions ([`Question::noul`], [`Question::choice`], [`Question::score`]) or the
+/// [`SystemOneRequest`](crate::SystemOneRequest) builder; the variants are
+/// `#[non_exhaustive]` so fields can follow the API without breaking callers.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Question {
     /// Yes/no. Answered with the probability of "yes".
+    #[non_exhaustive]
     Noul {
         /// The question, referring to the state.
         instructions: Value,
@@ -33,8 +41,9 @@ pub enum Question {
         #[serde(skip_serializing_if = "Option::is_none")]
         criteria: Option<NoulCriteria>,
     },
-    /// One option out of a defined set (at most 255). Answered with the chosen option
-    /// and the probability of every option.
+    /// One option out of a defined set (at most [`MAX_CHOICE_OPTIONS`]). Answered with
+    /// the chosen option and the probability of every option.
+    #[non_exhaustive]
     Choice {
         /// The question, referring to the state.
         instructions: Value,
@@ -42,6 +51,7 @@ pub enum Question {
         criteria: BTreeMap<String, Option<String>>,
     },
     /// A position along an ordered rubric of at least two levels.
+    #[non_exhaustive]
     Score {
         /// The question, referring to the state.
         instructions: Value,
@@ -97,6 +107,19 @@ impl Question {
             criteria: levels.into_iter().map(Into::into).collect(),
         }
     }
+
+    /// Why the API would reject this question, if it would. `None` = well-formed.
+    pub(crate) fn structural_problem(&self) -> Option<String> {
+        match self {
+            Self::Choice { criteria, .. } if criteria.is_empty() => Some("has no options".to_string()),
+            Self::Choice { criteria, .. } if criteria.len() > MAX_CHOICE_OPTIONS => Some(format!(
+                "has {} options; the API allows at most {MAX_CHOICE_OPTIONS}",
+                criteria.len()
+            )),
+            Self::Score { criteria, .. } if criteria.len() < 2 => Some("needs at least two levels".to_string()),
+            Self::Noul { .. } | Self::Choice { .. } | Self::Score { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,6 +156,25 @@ mod tests {
             serde_json::to_value(&q).unwrap(),
             json!({"type": "choice", "instructions": "Which team?", "criteria": {"billing": "Payments", "sales": null}})
         );
+    }
+
+    #[test]
+    fn choice_over_the_option_limit_is_a_structural_problem() {
+        let q = Question::choice_plain("?", (0..=MAX_CHOICE_OPTIONS).map(|i| format!("o{i}")));
+        assert!(q.structural_problem().unwrap().contains("256 options"));
+    }
+
+    #[test]
+    fn choice_at_the_option_limit_is_well_formed() {
+        let q = Question::choice_plain("?", (0..MAX_CHOICE_OPTIONS).map(|i| format!("o{i}")));
+        assert_eq!(q.structural_problem(), None);
+    }
+
+    #[test]
+    fn empty_choice_and_short_score_are_structural_problems() {
+        assert!(Question::choice_plain::<&str>("?", []).structural_problem().is_some());
+        assert!(Question::score("?", ["one"]).structural_problem().is_some());
+        assert_eq!(Question::noul("?").structural_problem(), None);
     }
 
     #[test]

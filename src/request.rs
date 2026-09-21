@@ -109,7 +109,8 @@ impl<'a> SystemOneRequest<'a> {
         self.question(id, Question::noul_with_criteria(instructions, yes, no))
     }
 
-    /// Pick one option; build the option set in the closure.
+    /// Pick one option; build the option set in the closure. Repeating an option name is an
+    /// error at `send`, as is an empty set or more than [`MAX_CHOICE_OPTIONS`](crate::MAX_CHOICE_OPTIONS) options.
     pub fn choice(
         mut self,
         id: impl Into<String>,
@@ -118,39 +119,21 @@ impl<'a> SystemOneRequest<'a> {
     ) -> Self {
         let id = id.into();
         let built = options(ChoiceBuilder::default());
-        if built.options.is_empty() {
-            self.fail(Error::InvalidRequest(format!("choice `{id}` has no options")));
+        if let Some(dup) = built.duplicates.first() {
+            self.fail(Error::InvalidRequest(format!("choice `{id}` repeats option `{dup}`")));
             return self;
         }
-        self.question(
-            id,
-            Question::Choice {
-                instructions: instructions.into(),
-                criteria: built.options,
-            },
-        )
+        self.question(id, Question::choice(instructions, built.options))
     }
 
-    /// Rate along `levels`, lowest first. At least two.
+    /// Rate along `levels`, lowest first. Fewer than two levels is an error at `send`.
     pub fn score<L: Into<String>>(
-        mut self,
+        self,
         id: impl Into<String>,
         instructions: impl Into<Value>,
         levels: impl IntoIterator<Item = L>,
     ) -> Self {
-        let id = id.into();
-        let levels: Vec<String> = levels.into_iter().map(Into::into).collect();
-        if levels.len() < 2 {
-            self.fail(Error::InvalidRequest(format!("score `{id}` needs at least two levels")));
-            return self;
-        }
-        self.question(
-            id,
-            Question::Score {
-                instructions: instructions.into(),
-                criteria: levels,
-            },
-        )
+        self.question(id, Question::score(instructions, levels))
     }
 
     /// Send the request.
@@ -158,8 +141,9 @@ impl<'a> SystemOneRequest<'a> {
     /// # Errors
     ///
     /// [`Error::InvalidRequest`] for a request that is not sendable as built: no state, no
-    /// questions, a Choice without options, a Score with fewer than two levels, a duplicate
-    /// question id, or a field added to a non-object state. [`Error::RequestSerialization`]
+    /// questions, a Choice without options or with more than [`MAX_CHOICE_OPTIONS`](crate::MAX_CHOICE_OPTIONS), a
+    /// repeated option name, a Score with fewer than two levels, a duplicate question id,
+    /// or a field added to a non-object state. [`Error::RequestSerialization`]
     /// if a `state`/`field` value failed to serialise. Otherwise as [`Client::evaluate`].
     pub async fn send(self) -> Result<SystemOneResponse> {
         if let Some(e) = self.error {
@@ -176,6 +160,13 @@ impl<'a> SystemOneRequest<'a> {
         };
         if self.questions.is_empty() {
             return Err(Error::InvalidRequest("no questions".into()));
+        }
+        if let Some((id, problem)) = self
+            .questions
+            .iter()
+            .find_map(|(id, q)| q.structural_problem().map(|p| (id, p)))
+        {
+            return Err(Error::InvalidRequest(format!("question `{id}` {problem}")));
         }
         match self.model {
             Some(model) => self.client.evaluate_with_model(&model, state, self.questions).await,
@@ -195,24 +186,33 @@ impl<'a> SystemOneRequest<'a> {
 #[must_use = "return the builder from the `choice` closure"]
 pub struct ChoiceBuilder {
     options: BTreeMap<String, Option<String>>,
+    duplicates: Vec<String>,
 }
 
 impl ChoiceBuilder {
+    fn insert(&mut self, name: String, description: Option<String>) {
+        if self.options.insert(name.clone(), description).is_some() {
+            self.duplicates.push(name);
+        }
+    }
+
     /// An option with a rubric description.
     pub fn option(mut self, name: impl Into<String>, description: impl Into<String>) -> Self {
-        self.options.insert(name.into(), Some(description.into()));
+        self.insert(name.into(), Some(description.into()));
         self
     }
 
     /// An option that needs no description.
     pub fn option_plain(mut self, name: impl Into<String>) -> Self {
-        self.options.insert(name.into(), None);
+        self.insert(name.into(), None);
         self
     }
 
     /// Many undescribed options at once.
     pub fn options_plain<K: Into<String>>(mut self, names: impl IntoIterator<Item = K>) -> Self {
-        self.options.extend(names.into_iter().map(|n| (n.into(), None)));
+        for name in names {
+            self.insert(name.into(), None);
+        }
         self
     }
 
@@ -222,8 +222,9 @@ impl ChoiceBuilder {
         K: Into<String>,
         V: Into<String>,
     {
-        self.options
-            .extend(pairs.into_iter().map(|(k, v)| (k.into(), Some(v.into()))));
+        for (name, description) in pairs {
+            self.insert(name.into(), Some(description.into()));
+        }
         self
     }
 

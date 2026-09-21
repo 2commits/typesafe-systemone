@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::json;
-use typesafe_systemone::{Client, Error, Question, RetryPolicy};
+use typesafe_systemone::{Client, Error, MAX_CHOICE_OPTIONS, Question, RetryPolicy};
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -420,6 +420,39 @@ async fn send_rejects_choice_without_options() {
         .unwrap_err();
     assert!(
         matches!(err, Error::InvalidRequest(ref m) if m.contains("no options")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn send_rejects_repeated_choice_option() {
+    let server = unreachable_server().await;
+    let err = client(&server)
+        .system_one()
+        .field("a", 1)
+        .choice("c", "?", |c| c.option_plain("x").option("x", "again"))
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("repeats option `x`")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn send_rejects_choice_over_the_option_limit_from_a_prebuilt_question() {
+    let server = unreachable_server().await;
+    let too_many = Question::choice_plain("?", (0..=MAX_CHOICE_OPTIONS).map(|i| format!("o{i}")));
+    let err = client(&server)
+        .system_one()
+        .field("a", 1)
+        .question("c", too_many)
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidRequest(ref m) if m.contains("at most 255")),
         "{err:?}"
     );
 }

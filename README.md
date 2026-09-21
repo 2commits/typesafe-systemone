@@ -43,8 +43,9 @@ if team.confidence >= 0.9 {
 
 `state` is whatever the questions refer to. Build it with `.field(name, value)` calls, or
 pass one `Serialize` value with `.state(my_struct)`; `.model(..)` overrides the client's
-model for one call. Input mistakes (no state, no questions, a Choice without options, a
-duplicate id) come back from `.send()` as `Error::InvalidRequest`, so the chain stays clean.
+model for one call. Input mistakes (no state, no questions, a Choice without options or over the 255 limit, a
+repeated option, a duplicate id) come back from `.send()` as `Error::InvalidRequest`, so the
+chain stays clean.
 
 Already holding a question map? `client.evaluate(state, questions)` takes `(id, Question)`
 pairs directly.
